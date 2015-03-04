@@ -26,6 +26,7 @@ importFrom("ROCR", "plot")
 importFrom("reshape2", "acast")
 importFrom("protiq", "iterateScampi")
 importFrom("protiq", "runScampi")
+importFrom("limma", "normalizeCyclicLoess")
 
 export("AbsoluteQuantification", "ProteinInference", "PeptideInference", "APEX", "proteotypic", "apexFeatures", "ALF", "cval", "import", "export", "pivot")
 
