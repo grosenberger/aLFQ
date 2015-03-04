@@ -2,11 +2,11 @@
 import <-
 function(ms_filenames, ms_filetype, ...) UseMethod("import")
 
-import.default <- function(ms_filenames, ms_filetype, concentration_filename=NA, averageruns=FALSE, sumruns=FALSE, mprophet_cutoff=0.01, openswath_superimpose_identifications=FALSE, openswath_replace_run_id=FALSE, openswath_filtertop=FALSE, openswath_removedecoys=TRUE, peptideprophet_cutoff=0.95, abacus_column="ADJNSAF", pepxml2csv_runsplit="~", ...) {
+import.default <- function(ms_filenames, ms_filetype, concentration_filename=NA, averageruns=FALSE, sumruns=FALSE, mprophet_cutoff=0.01, mprophet_protein_cutoff=NA, openswath_superimpose_identifications=FALSE, openswath_superimpose_protein_identifications=FALSE, openswath_replace_run_id=FALSE, openswath_filtertop=FALSE, openswath_removedecoys=TRUE, peptideprophet_cutoff=0.95, abacus_column="ADJNSAF", pepxml2csv_runsplit="~", diau_peptide_column="Top6tra", diau_protein_column="iBAQ", fasta=NA, ...) {
 	transition_intensity <- peptide_intensity <- protein_intensity <- NULL
 
-	if (!ms_filetype %in% c("openswath","mprophet","openmslfq","skyline","abacus","pepxml2csv")) {
-		stop("Please select a valid filetype. Options:  \"mzidentml\", \"openswath\", \"mprophet\", \"openmslfq\", \"skyline\", \"abacus\", \"pepxml2csv\"")
+	if (!ms_filetype %in% c("openswath","mprophet","openmslfq","skyline","abacus","pepxml2csv","diau_peptide","diau_protein")) {
+		stop("Please select a valid filetype. Options:  \"openswath\", \"mprophet\", \"openmslfq\", \"skyline\", \"abacus\", \"pepxml2csv\", \"diau_peptide\", \"diau_protein\"")
 	}
 	
 	# ms_filenames must be provided as vector and are converted to a list
@@ -30,7 +30,7 @@ import.default <- function(ms_filenames, ms_filetype, concentration_filename=NA,
 	# OpenSWATH import is facilitated by using the output from either mProphet or the TOPPtool OpenSwathFeatureXMLToTSV
 	else if (ms_filetype=="openswath") {
 		# OpenSWATH specific adapter
-		data.ms <- openswath_converter.import(ms_filenames,mprophet_cutoff=mprophet_cutoff,openswath_superimpose_identifications=openswath_superimpose_identifications, openswath_replace_run_id=openswath_replace_run_id, openswath_filtertop = openswath_filtertop, openswath_removedecoys=openswath_removedecoys)
+		data.ms <- openswath_converter.import(ms_filenames,mprophet_cutoff=mprophet_cutoff,mprophet_protein_cutoff=mprophet_protein_cutoff,openswath_superimpose_identifications=openswath_superimpose_identifications, openswath_superimpose_protein_identifications=openswath_superimpose_protein_identifications, openswath_replace_run_id=openswath_replace_run_id, openswath_filtertop = openswath_filtertop, openswath_removedecoys=openswath_removedecoys)
 
 		if (averageruns==TRUE){
 			data.ms <- averageruns.import(data.ms,target="transition_intensity")
@@ -96,6 +96,39 @@ import.default <- function(ms_filenames, ms_filetype, concentration_filename=NA,
 		}
 		data <- subset(data.ms,is.finite(peptide_intensity))
 	}
+	else if (ms_filetype=="diau_peptide") {
+		data.ms <- diau_peptide_converter.import(ms_filenames, peptideprophet_cutoff=peptideprophet_cutoff, diau_peptide_column=diau_peptide_column)
+		if (averageruns==TRUE){
+			data.ms <- averageruns.import(data.ms,target="peptide_intensity")
+			data.ms$run_id <- "averaged"
+		}
+		if (sumruns==TRUE){
+			data.ms <- sumruns.import(data.ms,target="peptide_intensity")
+			data.ms$run_id <- "summed"
+		}
+		data <- subset(data.ms,is.finite(peptide_intensity))
+	}
+	else if (ms_filetype=="diau_protein") {
+		data.ms <- diau_protein_converter.import(ms_filenames, peptideprophet_cutoff=peptideprophet_cutoff, diau_protein_column=diau_protein_column)
+		if (averageruns==TRUE){
+			data.ms <- averageruns.import(data.ms,target="peptide_intensity")
+			data.ms$run_id <- "averaged"
+		}
+		if (sumruns==TRUE){
+			data.ms <- sumruns.import(data.ms,target="peptide_intensity")
+			data.ms$run_id <- "summed"
+		}
+		data <- subset(data.ms,is.finite(protein_intensity))
+	}
+
+	if (!is.na(fasta)) {
+		proteins <- read.fasta(file = fasta, seqtype = "AA", as.string = TRUE, seqonly = FALSE, strip.desc = TRUE)
+		sequences<-sapply(proteins,function(X){return(X[1][[1]])})
+		index<-data.frame("peptide_sequence"=unique(data$peptide_sequence),stringsAsFactors=FALSE)
+		index$protein_id<-sapply(index$peptide_sequence,function(X){mappeptides.import(X,sequences)})
+		data<-merge(data[,!(names(data) %in% c("protein_id"))],index,by="peptide_sequence")
+		data[which(data$protein_id=="0/"),]$protein_id<-NA
+	}
 
 	if ("peptide_sequence" %in% names(data)) {
 		# peptide_sequence is stripped and can only contain the 20 natural AA without any modifications
@@ -153,18 +186,27 @@ skyline_converter.import <- function(ms_filenames, ...)  {
 	return(data.ms)
 }
 
-openswath_converter.import <- function(ms_filenames, mprophet_cutoff, openswath_superimpose_identifications, openswath_replace_run_id, openswath_filtertop, openswath_removedecoys,...)  {
+openswath_converter.import <- function(ms_filenames, mprophet_cutoff, mprophet_protein_cutoff,openswath_superimpose_identifications, openswath_superimpose_protein_identifications, openswath_replace_run_id, openswath_filtertop, openswath_removedecoys,...)  {
 	transition_code <- transition_code_intensity <- transition_id <- peptide_id <- transition_fragment <- m_score <- peak_group_rank <- decoy <- NULL
 
 	data.files = lapply(ms_filenames, read_table.import, openswath_replace_run_id=openswath_replace_run_id)
 	data.import <- data.table(do.call("rbind", data.files))
 
 
-	# mProphet headers
-	data.ms <- data.import[,c("run_id","ProteinName","FullPeptideName","m_score","peak_group_rank","Sequence","Charge","aggr_Fragment_Annotation","aggr_Peak_Area","decoy"), with = FALSE]
+	if ("align_origfilename" %in% names(data.import)) {
+		# OpenSWATH Feature Alignment headers
+		data.ms <- data.import[,c("align_origfilename","ProteinName","FullPeptideName","m_score","peak_group_rank","Sequence","Charge","aggr_Fragment_Annotation","aggr_Peak_Area","decoy"), with = FALSE]
 
-	# aLFQ headers
-	setnames(data.ms,c("run_id","ProteinName","FullPeptideName","m_score","peak_group_rank","Sequence","Charge","aggr_Fragment_Annotation","aggr_Peak_Area","decoy"),c("run_id","protein_id","peptide_id","m_score","peak_group_rank","peptide_sequence","precursor_charge","transition_code","transition_code_intensity","decoy"))
+		# aLFQ headers
+		setnames(data.ms,c("align_origfilename","ProteinName","FullPeptideName","m_score","peak_group_rank","Sequence","Charge","aggr_Fragment_Annotation","aggr_Peak_Area","decoy"),c("run_id","protein_id","peptide_id","m_score","peak_group_rank","peptide_sequence","precursor_charge","transition_code","transition_code_intensity","decoy"))
+	}
+	else {
+		# OpenSWATH headers
+		data.ms <- data.import[,c("filename","ProteinName","FullPeptideName","m_score","peak_group_rank","Sequence","Charge","aggr_Fragment_Annotation","aggr_Peak_Area","decoy"), with = FALSE]
+
+		# aLFQ headers
+		setnames(data.ms,c("filename","ProteinName","FullPeptideName","m_score","peak_group_rank","Sequence","Charge","aggr_Fragment_Annotation","aggr_Peak_Area","decoy"),c("run_id","protein_id","peptide_id","m_score","peak_group_rank","peptide_sequence","precursor_charge","transition_code","transition_code_intensity","decoy"))
+	}
 	
 	setkeyv(data.ms,c("run_id","transition_code","protein_id","peptide_id","m_score","peak_group_rank","peptide_sequence","precursor_charge","decoy"))
 
@@ -172,13 +214,19 @@ openswath_converter.import <- function(ms_filenames, mprophet_cutoff, openswath_
 
 	data.ms[, transition_id:=paste(peptide_id,transition_fragment)]
 
-	# filter mprophet_cutoff
+	# filter mprophet_cutoff on assay-level
 	if (openswath_superimpose_identifications) {
 		tcset <- unique(subset(data.ms, m_score <= mprophet_cutoff)$transition_code)
 		data.ms <- subset(data.ms, transition_code %in% tcset)
 	}
 	else {
-			data.ms <- subset(data.ms, m_score <= mprophet_cutoff)
+		data.ms <- subset(data.ms, m_score <= mprophet_cutoff)
+	}
+
+	# filter mprophet_cutoff on protein-level
+	if (openswath_superimpose_protein_identifications) {
+		protset <- unique(subset(data.ms, m_score <= mprophet_protein_cutoff)$protein_id)
+		data.ms <- subset(data.ms, protein_id %in% protset)
 	}
 
 	# filter top peakgroup
@@ -230,7 +278,7 @@ mprophet_converter.import <- function(ms_filenames, mprophet_cutoff, openswath_r
 
 read_table.import <- function(filename, openswath_replace_run_id = FALSE, ...) {
 	# helper function for mProphet to read runs. filenames are converted to the run_id.
-	data <- read.csv(filename, sep = "\t",stringsAsFactors=FALSE)
+	data <- as.data.frame(fread(filename))
 
 	if (openswath_replace_run_id) {
 		data$run_id <- filename
@@ -317,10 +365,56 @@ pepxml2csv_converter.import <- function(ms_filenames, peptideprophet_cutoff, pep
 	return(as.data.frame(data.ms))
 }
 
+diau_peptide_converter.import <- function(ms_filenames, peptideprophet_cutoff, diau_peptide_column, ...)  {
+	data.files = lapply(ms_filenames, read.csv, sep="\t", stringsAsFactors=FALSE)
+
+	data.trans<-lapply(data.files,function(X){diau_peptide_transform.import(X,peptideprophet_cutoff,diau_peptide_column)})
+
+	data.ms <- do.call("rbind", data.trans)
+
+	return(data.ms)
+}
+diau_peptide_transform.import <- function(data, peptideprophet_cutoff, diau_peptide_column, ...)  {
+	data.re<-ldply(lapply(unlist(strsplit(names(data)[grepl("_Spec_Centric_Prob", names(data))],"_Spec_Centric_Prob")),function(X){data.frame("run"=X,"peptide_id"=data$Peptide.Key,"precursor_charge"=data$Charge,"Spec_Centric_Prob"=data[,paste(X,"Spec_Centric_Prob",sep="_")],"Pep_Centric_Prob"=data[,paste(X,"Pep_Centric_Prob",sep="_")],"RT"=data[,paste(X,"RT",sep="_")],"MS1"=data[,paste(X,"MS1",sep="_")],"Top6pepTop6tra.Freq.0.5."=data[,paste(X,"Top6tra.Freq.0.5.",sep="_")],"Top6tra"=data[,paste(X,"Top6tra",sep="_")])}),data.frame)
+
+	data.filt <- subset(data.re, Pep_Centric_Prob >= peptideprophet_cutoff)
+
+	data.ms <- data.filt[,c("run","peptide_id","precursor_charge",diau_peptide_column)]
+
+	names(data.ms) <- c("run_id","peptide_id","precursor_charge","peptide_intensity")
+
+	data.ms$peptide_sequence<-unlist(sapply(data.ms$peptide_id,function(X){gsub("[^[:alpha:]]","",gsub("\\[[^\\]]*\\]", "", X, perl=TRUE))}))
+	
+	return(data.ms)
+}
+diau_protein_converter.import <- function(ms_filenames, peptideprophet_cutoff, diau_protein_column, ...)  {
+	data.files = lapply(ms_filenames, read.csv, sep="\t", stringsAsFactors=FALSE)
+
+	data.trans<-lapply(data.files,function(X){diau_protein_transform.import(X,peptideprophet_cutoff,diau_protein_column)})
+
+	data.ms <- do.call("rbind", data.trans)
+
+	return(data.ms)
+}
+diau_protein_transform.import <- function(data, peptideprophet_cutoff, diau_protein_column, ...)  {
+	data.re<-ldply(lapply(unlist(strsplit(names(data)[grepl("_Prob", names(data))],"_Prob")),function(X){data.frame("run"=X,"protein_id"=data$Protein.Key,"Prob"=data[,paste(X,"Prob",sep="_")],"peptides"=data[,paste(X,"Peptides",sep="_")],"Top6pepTop6tra.Freq.0.5."=data[,paste(X,"Top6pepTop6tra.Freq.0.5.",sep="_")],"Top6pepTop6tra"=data[,paste(X,"Top6pepTop6tra",sep="_")],"iBAQ"=data[,paste(X,"iBAQ",sep="_")])}),data.frame)
+
+	data.filt <- subset(data.re, Prob >= peptideprophet_cutoff)
+
+	data.ms <- data.filt[,c("run","protein_id",diau_protein_column)]
+
+	names(data.ms) <- c("run_id","protein_id","protein_intensity")
+	
+	return(data.ms)
+}
+
 stripsequence.import <- function(X, ...) {
 	return(gsub('[a-z]','',gsub('\\[[^\\[\\]]*\\]','',gsub('\\[[^\\[\\]]*\\]','',gsub('\\([^()]*\\)','',gsub('\\([^()]*\\)','',gsub('\\{[^{}]*\\}','',gsub('\\{[^{}]*\\}','',X)))),perl=TRUE),perl=TRUE),perl=TRUE))
+}
 
-
+mappeptides.import <- function(X, sequences, ...) {
+	protein_ids<-names(sequences)[grep(X,sequences)]
+	return(paste(length(protein_ids),paste(protein_ids,collapse="/"),sep="/"))
 }
 
 averageruns.import <- function(data,target="transition_intensity", ...)  {
