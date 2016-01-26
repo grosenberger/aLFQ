@@ -28,7 +28,7 @@ importFrom("protiq", "iterateScampi")
 importFrom("protiq", "runScampi")
 importFrom("limma", "normalizeCyclicLoess")
 
-export("AbsoluteQuantification", "ProteinInference", "PeptideInference", "APEX", "proteotypic", "apexFeatures", "ALF", "cval", "import", "export", "pivot")
+export("AbsoluteQuantification", "ProteinInference", "PeptideInference", "APEX", "proteotypic", "apexFeatures", "ALF", "cval", "import", "export", "pivot","normalizeBetweenRuns")
 
 S3method("AbsoluteQuantification", "default")
 S3method("predict", "AbsoluteQuantification")
@@ -58,3 +58,5 @@ S3method("import", "default")
 
 S3method("pivot", "default")
 S3method("pivot", "AbsoluteQuantification")
+
+S3method("normalizeBetweenRuns", "default")
