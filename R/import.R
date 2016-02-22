@@ -5,8 +5,8 @@ function(ms_filenames, ms_filetype, ...) UseMethod("import")
 import.default <- function(ms_filenames, ms_filetype, concentration_filename=NA, averageruns=FALSE, sumruns=FALSE, mprophet_cutoff=0.01, mprophet_protein_cutoff=NA, openswath_superimpose_identifications=FALSE, openswath_superimpose_protein_identifications=FALSE, openswath_replace_run_id=FALSE, openswath_filtertop=FALSE, openswath_removedecoys=TRUE, peptideprophet_cutoff=0.95, abacus_column="ADJNSAF", pepxml2csv_runsplit="~", diau_peptide_column="Top6tra", diau_protein_column="iBAQ", fasta=NA, ...) {
 	transition_intensity <- peptide_intensity <- protein_intensity <- NULL
 
-	if (!ms_filetype %in% c("openswath","mprophet","openmslfq","skyline","abacus","pepxml2csv","diau_peptide","diau_protein")) {
-		stop("Please select a valid filetype. Options:  \"openswath\", \"mprophet\", \"openmslfq\", \"skyline\", \"abacus\", \"pepxml2csv\", \"diau_peptide\", \"diau_protein\"")
+	if (!ms_filetype %in% c("openswath","mprophet","openmslfq","skyline","abacus","pepxml2csv","diau_peptide","diau_protein","maxquant_peptide")) {
+		stop("Please select a valid filetype. Options:  \"openswath\", \"mprophet\", \"openmslfq\", \"skyline\", \"abacus\", \"pepxml2csv\", \"diau_peptide\", \"diau_protein\", \"maxquant_peptide\"")
 	}
 	
 	# ms_filenames must be provided as vector and are converted to a list
@@ -119,6 +119,19 @@ import.default <- function(ms_filenames, ms_filetype, concentration_filename=NA,
 			data.ms$run_id <- "summed"
 		}
 		data <- subset(data.ms,is.finite(protein_intensity))
+	}
+	# MaxQuant peptide import is facilitated from peptides.txt
+	else if (ms_filetype=="maxquant_peptide") {
+		data.ms <- maxquant_peptide_converter.import(ms_filenames)
+		if (averageruns==TRUE){
+			data.ms <- averageruns.import(data.ms,target="peptide_intensity")
+			data.ms$run_id <- "averaged"
+		}
+		if (sumruns==TRUE){
+			data.ms <- sumruns.import(data.ms,target="peptide_intensity")
+			data.ms$run_id <- "summed"
+		}
+		data <- subset(data.ms,is.finite(peptide_intensity))
 	}
 
 	if (!is.na(fasta)) {
@@ -311,6 +324,29 @@ openmslfq_transform.import <- function(data, ...) {
 		data.trans <- rbind(data.trans,data.frame(run_id = names(data)[i], protein_id = data$protein, peptide_id = data$peptide, peptide_sequence = data$peptide, precursor_charge = data$charge, peptide_intensity = data[,i], stringsAsFactors=FALSE))
 	
 		i <- i-1
+	}
+
+	return(data.trans)
+}
+
+maxquant_peptide_converter.import <- function(ms_filenames, ...)  {
+	# we need to skip the comments in the header
+	data.files = lapply(ms_filenames, read.csv, sep = "\t",  comment.char = "#", blank.lines.skip = TRUE, stringsAsFactors=FALSE)
+
+	data.trans<-lapply(data.files,maxquant_peptide_transform.import)
+
+	data.ms <- do.call("rbind", data.trans)
+
+	return(data.ms)
+}
+maxquant_peptide_transform.import <- function(data, ...) {
+	# converts short to long format
+	# filter proteotypic peptides	
+	data.trans <- data.frame(run_id = NA, protein_id = NA, peptide_id = NA, peptide_sequence = NA, precursor_charge = NA, peptide_intensity = NA, stringsAsFactors=FALSE)[0,]
+
+	run_intensities<-names(data)[as.vector(sapply(names(data),function(X){substr(X,1,10)=="Intensity."}))]
+	for (i in 1:length(run_intensities)) {
+		data.trans <- rbind(data.trans,data.frame(run_id = gsub("Intensity.", "", run_intensities[i]), protein_id = data$Proteins, peptide_id = data$Sequence, peptide_sequence = data$Sequence, precursor_charge = data$Charges[1], peptide_intensity = data[,run_intensities[i]], stringsAsFactors=FALSE))	
 	}
 
 	return(data.trans)
