@@ -24,8 +24,6 @@ importFrom("ROCR", "prediction")
 importFrom("ROCR", "performance")
 importFrom("ROCR", "plot")
 importFrom("reshape2", "acast")
-importFrom("protiq", "iterateScampi")
-importFrom("protiq", "runScampi")
 
 export("AbsoluteQuantification", "ProteinInference", "PeptideInference", "APEX", "proteotypic", "apexFeatures", "ALF", "cval", "import", "export", "pivot")
 
